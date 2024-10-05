@@ -1,0 +1,11 @@
+import requests
+
+ESP8266_IP = "http://<ESP8266_IP>/toggle/led"  # Replace with your ESP8266 IP
+
+# Toggle the LED on the ESP8266
+response = requests.post(ESP8266_IP)
+
+if response.status_code == 200:
+    print("LED toggled successfully!")
+else:
+    print("Failed to toggle LED.")

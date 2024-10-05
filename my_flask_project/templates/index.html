@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LED Control</title>
+</head>
+<body>
+    <h1>Control LEDs</h1>
+    <button onclick="toggleLed('1')">Toggle LED 1</button>
+    <button onclick="toggleLed('2')">Toggle LED 2</button>
+    <button onclick="toggleLed('3')">Toggle LED 3</button>
+
+    <script>
+        function toggleLed(ledId) {
+            fetch(`/toggle/${ledId}`, {
+                method: 'POST'
+            });
+        }
+    </script>
+</body>
+</html>
