@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/x-icon" href="/static/quintrans_Logo.png">
+    <title>Actuator Control</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f9f9f9;
+            color: #333;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 20px 0;
+        }
+
+        .progress-bar-inner {
+            height: 100%;
+            background-color: #4caf50;
+            width: 0%;
+            text-align: center;
+            line-height: 20px;
+            color: white;
+            font-size: 12px;
+        }
+
+        .actuator-list {
+            margin-top: 20px;
+        }
+
+        .actuator-item {
+            margin: 10px 0;
+            border: 1px solid #ccc;
+            padding: 10px;
+            border-radius: 5px;
+            background-color: #fff;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            transition: height 0.3s ease;
+            overflow: hidden;
+        }
+
+        .actuator-item strong {
+            font-size: 16px;
+        }
+
+        .actuator-details {
+            display: none;
+            margin-top: 10px;
+            padding: 10px;
+            border-top: 1px solid #ddd;
+        }
+
+        .expanded .actuator-details {
+            display: block;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            margin: 5px;
+            border: none;
+            cursor: pointer;
+            color: white;
+            font-weight: bold;
+            border-radius: 4px;
+            transition: background-color 0.3s ease;
+        }
+
+        .btn-start {
+            background-color: #28a745;
+        }
+
+        .btn-start:hover {
+            background-color: #218838;
+        }
+
+        .btn-stop {
+            background-color: #dc3545;
+        }
+
+        .btn-stop:hover {
+            background-color: #c82333;
+        }
+
+        .slider {
+            width: 100%;
+            margin: 10px 0;
+        }
+
+        .position-input {
+            width: 60px;
+            text-align: center;
+            padding: 5px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        #start-search {
+            display: block;
+            margin: 0 auto;
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            font-size: 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+
+        #start-search:hover {
+            background-color: #0056b3;
+        }
+
+        #start-search:active {
+            transform: scale(0.98);
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Actuator Control</h1>
+
+    <button id="start-search" onclick="startSearch()">Start Search</button>
+
+    <div class="progress-bar">
+        <div class="progress-bar-inner" id="progress"></div>
+    </div>
+
+    <div class="actuator-list" id="actuator-list"></div>
+
+    <script>
+        function startSearch() {
+            const actuatorList = document.getElementById("actuator-list");
+            const progressBar = document.getElementById("progress");
+
+            actuatorList.innerHTML = "";  // Clear existing actuator list
+            progressBar.style.width = "0%"; // Reset progress bar
+
+            const source = new EventSource("/check");
+
+            source.onmessage = function(event) {
+                if (event.data.startsWith("Found ")) {
+                    const ip = event.data.replace("Found ", "");
+
+                    // Add actuator IP to the list dynamically
+                    const actuatorItem = document.createElement("div");
+                    actuatorItem.classList.add("actuator-item");
+                    actuatorItem.innerHTML = `
+                        <div>
+                            <strong>${ip}</strong>
+                            <button class="btn btn-start" onclick="toggleActuator('${ip}', this)">Start</button>
+                            <button class="btn btn-stop" onclick="sendControl('${ip}', 'stop')">Stop</button>
+                        </div>
+                        <div class="actuator-details">
+                            <input type="range" min="0" max="100" value="0" class="slider" id="slider-${ip}" oninput="updateInput('${ip}')">
+                            <br>
+                            Position: <input type="number" min="0" max="100" value="0" class="position-input" id="input-${ip}" onchange="updateSlider('${ip}')">
+                        </div>
+                    `;
+                    actuatorList.appendChild(actuatorItem);
+                } else if (event.data.startsWith("Progress ")) {
+                    const progress = event.data.replace("Progress ", "").replace("%", "");
+                    progressBar.style.width = progress + "%";
+
+                    // Optionally display the percentage on the progress bar
+                    progressBar.textContent = progress + "%";
+                }
+
+                if (event.data === "Progress 100%") {
+                    source.close();
+                }
+            };
+        }
+
+        function toggleActuator(ip, button) {
+            const actuatorItem = button.parentElement.parentElement;
+            actuatorItem.classList.toggle("expanded");
+        }
+
+        function updateInput(ip) {
+            const slider = document.getElementById(`slider-${ip}`);
+            const input = document.getElementById(`input-${ip}`);
+            input.value = slider.value;
+        }
+
+        function updateSlider(ip) {
+            const slider = document.getElementById(`slider-${ip}`);
+            const input = document.getElementById(`input-${ip}`);
+            slider.value = input.value;
+        }
+
+        function sendControl(ip, action) {
+            const slider = document.getElementById(`slider-${ip}`);
+            const position = slider.value;
+
+            fetch(`/control/${ip}`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ action: action, position: position })
+            })
+            .then(response => response.json())
+            .then(data => {
+                alert(data.status);
+            })
+            .catch(error => {
+                console.error("Error controlling actuator:", error);
+            });
+        }
+    </script>
+
+</body>
+</html>
