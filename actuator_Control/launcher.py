@@ -1,78 +1,116 @@
-import os
-import threading
-import time
-import webbrowser
-import tkinter as tk
-from threading import Thread
-from flask import Flask, render_template
-from werkzeug.serving import make_server
+import socket
+import subprocess
+from flask import Flask, jsonify, render_template, Response, request
+import logging
+from concurrent.futures import ThreadPoolExecutor
+import atexit
 
-# Import your existing Flask app
-from app import app
+app = Flask(__name__)
 
-# Function to start Flask server
-def start_flask_server():
-    # Start Flask in a separate thread and handle server shutdown gracefully
-    httpd = make_server('127.0.0.1', 5000, app)
-    print("Flask server running at http://127.0.0.1:5000")
-    httpd.serve_forever()
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Function to display the loading screen
-def show_loading_screen():
-    # Create the tkinter root window
-    root = tk.Tk()
-    root.title("Loading")
-    
-    # Set window size and print for debugging
-    print("Window size:", "1400x700")  # Print to check if the dimensions are being set correctly
-    root.geometry("1400x700")  # Set window size to 1600x600 (or any other preferred size)
-    root.configure(bg="#ffffff")
-    
-    # Force Tkinter to update the window
-    root.update()  # Refresh the window to apply the geometry
-    
-    # Check if window size is applied correctly
-    print(f"Window size after update: {root.winfo_width()}x{root.winfo_height()}")
+# Initialize the global ThreadPoolExecutor
+executor = ThreadPoolExecutor(max_workers=50)
 
-    # Add a logo
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    logo_path = os.path.join(current_dir, "static", "quintrans_Logo_Big.png")
-    
+# Flag to indicate if the app is shutting down
+is_shutting_down = False
+
+# Function to get the local IP address of the machine
+def get_local_ip():
+    hostname = socket.gethostname()
+    local_ip = socket.gethostbyname(hostname)
+    logger.info(f"Local IP address: {local_ip}")
+    return local_ip
+
+# Function to ping an IP and retrieve its MAC address
+def ping_ip(ip):
     try:
-        logo = tk.PhotoImage(file=logo_path)  # Load logo
-        logo_label = tk.Label(root, image=logo, bg="#ffffff")
-        logo_label.pack(pady=20)
+        # Windows-compatible ping command
+        result = subprocess.run(
+            ["ping", "-n", "1", "-w", "100", ip],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if result.returncode == 0:  # Ping successful
+            # Use arp to get the MAC address
+            arp_result = subprocess.run(
+                ["arp", "-a", ip],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            output = arp_result.stdout
+            for line in output.splitlines():
+                if ip in line:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        mac_address = parts[1]  # Typically the second column
+                        return ip, mac_address
+            return ip, None
     except Exception as e:
-        print(f"Error loading logo: {e}")
+        logger.error(f"Error pinging {ip}: {e}")
+    return None, None
 
-    # Add a loading text
-    loading = tk.Label(root, text="Starting the server...", bg="#ffffff", font=("Arial", 14))
-    loading.pack()
+@app.route('/')
+def home():
+    return render_template("index.html")
 
-    # Close the loading screen after 5 seconds
-    def close_screen():
-        time.sleep(5)
-        root.destroy()
+@app.route('/check', methods=['GET'])
+def check_actuators():
+    def generate():
+        if is_shutting_down:
+            yield "data: Server is shutting down. No more tasks will be scheduled.\n\n"
+            return
+        
+        local_ip = get_local_ip()
+        subnet = ".".join(local_ip.split('.')[:3])  # Extract the subnet (e.g., 192.168.0)
+        logger.info(f"Scanning subnet: {subnet}.0/24")
+        total_ips = 254
+        scanned_ips = 0
 
-    Thread(target=close_screen).start()
+        futures = []
+        for i in range(1, 255):
+            ip = f"{subnet}.{i}"
+            if not is_shutting_down:  # Prevent submitting tasks if the server is shutting down
+                future = executor.submit(ping_ip, ip)
+                futures.append(future)
 
-    # When the window is closed, terminate the Flask server
-    def on_close():
-        print("Window closed. Shutting down Flask server.")
-        os._exit(0)  # Terminate the process when the window is closed
+        for future in futures:
+            scanned_ips += 1
+            try:
+                ip, mac_address = future.result()
+                if ip:
+                    if mac_address:
+                        yield f"data: Found {ip} (MAC: {mac_address})\n\n"
+                    else:
+                        yield f"data: Found {ip}\n\n"
+            except Exception as e:
+                logger.error(f"Error processing future: {e}")
 
-    root.protocol("WM_DELETE_WINDOW", on_close)  # Register on_close when the window is closed
-    root.mainloop()
+            progress = (scanned_ips / total_ips) * 100
+            yield f"data: Progress {int(progress)}%\n\n"
 
-# Main function to run the program
-if __name__ == "__main__":
-    # Run Flask in a separate thread
-    flask_thread = threading.Thread(target=start_flask_server)
-    flask_thread.daemon = True
-    flask_thread.start()
+    return Response(generate(), mimetype='text/event-stream')
 
-    # Show the loading screen
-    show_loading_screen()
+@app.route('/control/<ip>', methods=['POST'])
+def control_actuator(ip):
+    action = request.json.get("action", "default")
+    logger.info(f"Received action '{action}' for IP {ip}")
+    return jsonify({"status": f"Sent '{action}' command to actuator at {ip}"})
 
-    # Open the actuator control site in the browser
-    webbrowser.open("http://127.0.0.1:5000")
+# Shutdown the executor only when the app shuts down
+def shutdown():
+    global is_shutting_down
+    is_shutting_down = True
+    logger.info("Shutting down executor...")
+    executor.shutdown(wait=True)
+
+atexit.register(shutdown)
+
+if __name__ == '__main__':
+    try:
+        app.run(debug=True, threaded=False)
+    except KeyboardInterrupt:
+        logger.info("Shutting down server gracefully...")
